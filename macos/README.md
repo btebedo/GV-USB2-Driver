@@ -4,17 +4,19 @@ Lossless SD capture from an I-O DATA GV-USB2 (USB 2.0 composite / S-Video
 dongle, `04bb:0532`) on macOS, which has no official driver. User-space only
 (libusb): no kext, no DriverKit, no root.
 
-Device logic is ported from Isaac Lozano's Linux driver
-(<https://github.com/Isaac-Lozano/GV-USB2-Driver>, dual BSD/GPL, used under BSD).
+Device logic is ported from Isaac Lozano's Linux driver, which lives at the top
+of this repository (<https://github.com/Isaac-Lozano/GV-USB2-Driver>, dual
+BSD/GPL; this port uses the BSD option).
 
 ## Build
 
 ```bash
 brew install libusb pkg-config
+cd macos
 make
 ```
 
-Produces `build/gvcap` and `build/gvdump`. Builds on Intel and Apple Silicon.
+Run from `macos/`; produces `build/gvcap` and `build/gvdump`. Builds on Intel and Apple Silicon.
 
 ## Use
 
