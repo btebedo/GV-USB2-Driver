@@ -1,114 +1,169 @@
 # GV-USB2 drivers
 
-Drivers for the I-O DATA GV-USB2 SD capture device (USB 2.0 composite / S-Video
-dongle, `04bb:0532`):
+Open-source drivers for the I-O DATA **GV-USB2**, a USB 2.0 standard-definition
+capture device with composite and S-Video inputs and stereo audio
+(USB ID `04bb:0532`). I-O DATA only ships Windows drivers.
 
-- **Linux**: a kernel driver (V4L2 + ALSA), in the top level of this repository.
-- **macOS**: `gvcap`, a user-space capture tool, in [`macos/`](macos/).
+| Platform | What | Folder |
+|---|---|---|
+| Linux | Kernel driver: V4L2 video device + ALSA sound card | [`linux/`](linux/) |
+| macOS | `gvcap`, a user-space capture tool (libusb, no kext) | [`macos/`](macos/) |
 
-## Linux driver
+```
+.
+├── linux/      Linux kernel modules (gvusb2-video, gvusb2-sound)
+├── macos/      gvcap capture tool and gvdump diagnostic tool
+│   └── src/
+└── README.md
+```
 
-A linux driver for the IO-DATA GV-USB2 SD capture device.
+## Linux
 
-## macOS: gvcap
+The original driver by Isaac Lozano, unchanged in this fork apart from moving
+into `linux/`. It builds two out-of-tree modules against your running kernel and
+uses the kernel's own `tw9910` decoder driver.
 
-Lossless SD capture from the GV-USB2 on macOS, which has no official driver.
-User-space only (libusb): no kext, no DriverKit, no root.
+```bash
+cd linux
+make
+sudo modprobe tw9910
+sudo insmod gvusb2-video.ko
+sudo insmod gvusb2-sound.ko
+```
 
-The device logic is ported from the Linux driver above (dual BSD/GPL; this port
-uses the BSD option, see [macos/LICENSE](macos/LICENSE)).
+You need the headers for your kernel (for example `linux-headers-$(uname -r)` on
+Debian/Ubuntu). The device then appears as a `/dev/video*` capture device
+(720×480 or 720×576, UYVY) and an ALSA card named `gvusb2` (48 kHz stereo).
+Arch users can install the `gv-usb2-driver-dkms-git` package from the AUR instead.
+
+## macOS
+
+`gvcap` captures losslessly to stdout, ready to pipe into ffmpeg. It runs
+entirely in user space: no kernel extension, no DriverKit, no root.
 
 ### Build
 
 ```bash
 brew install libusb pkg-config
-make -C macos
+cd macos
+make
 ```
 
-Produces `macos/build/gvcap` and `macos/build/gvdump`. Builds on Intel and Apple Silicon.
+This produces `build/gvcap` and `build/gvdump`. It builds on Intel and Apple Silicon.
 
-### Use
+### Capture
+
+From `macos/`:
 
 ```bash
-macos/build/gvcap --input composite | ffmpeg -f rawvideo -pix_fmt uyvy422 -s 720x480 -r 30000/1001 -top 1 -i - -c:v ffv1 -level 3 out.mkv
+build/gvcap --input composite | ffmpeg -f rawvideo -pix_fmt uyvy422 -s 720x480 -r 30000/1001 -top 1 -i - -c:v ffv1 -level 3 out.mkv
 ```
 
-With audio (the device's audio is not USB Audio Class, so macOS does not see it;
-gvcap reads it itself and writes raw 48 kHz 16-bit stereo to a file or FIFO):
+With audio. The device's audio is not standard USB Audio, so macOS does not list
+it as an input; gvcap reads it itself and writes raw 48 kHz 16-bit stereo to a
+file or FIFO:
 
 ```bash
 mkfifo /tmp/gv.pcm
-macos/build/gvcap -i composite -a /tmp/gv.pcm | ffmpeg \
+build/gvcap -i composite -a /tmp/gv.pcm | ffmpeg \
     -f rawvideo -pix_fmt uyvy422 -s 720x480 -r 30000/1001 -top 1 -i - \
     -f s16le -ar 48000 -ac 2 -i /tmp/gv.pcm \
     -c:v ffv1 -level 3 -c:a pcm_s16le out.mkv
 ```
 
-`-top 1` matters: the frames are interlaced, top field first, and without it
-ffmpeg marks them progressive, so players won't deinterlace them correctly.
+Keep `-top 1`: the frames are interlaced, top field first, and without it ffmpeg
+marks them progressive, so players won't deinterlace them correctly.
 
-Stop with Ctrl-C. `gvcap --help` lists the options (`--std pal`, `--frames`,
-`--timestamps`, `--no-resync`, `--hdelay`, ...). A status line goes to stderr
-every 5 s with frame, duplicate, drop and error counts and whether the decoder
-sees a signal.
+Stop with Ctrl-C. Every 5 s gvcap prints a status line to stderr with frame,
+duplicate, drop and error counts and whether the decoder sees a signal.
 
-`macos/build/gvdump` prints the USB descriptors; `gvdump --regs [svideo]` also
-initialises the device and dumps the TW9910 registers (reg `01` bit 7 set = no
-video signal).
+### Options
 
-### How the device works
-
-| | |
+| Option | Meaning |
 |---|---|
-| Bridge | Syntek STK1150, registers via vendor control requests (`0x00` read, `0x01` write, register in wIndex) |
-| Decoder | Techwell TW9910 at I2C `0x44`, reached through the bridge's I2C master (regs `0x0200`–`0x0209`); ID register reads `0x59` |
-| Video | interface 0, alt 5, EP `0x82` isochronous, 3 × 1024 bytes per microframe |
-| Audio | interface 2, alt 1, EP `0x84` isochronous, raw PCM 48 kHz s16le stereo (vendor class, not UAC) |
+| `-i`, `--input composite\|svideo` | Video input (default composite) |
+| `-s`, `--std ntsc\|pal` | 720×480 at 29.97 fps, or 720×576 at 25 fps (default NTSC) |
+| `-a`, `--audio PATH` | Also write audio to a file or FIFO |
+| `-n`, `--frames N` | Stop after N frames |
+| `-t`, `--timestamps PATH` | Per-frame CSV: index, time on the USB clock, audio sample count, flag |
+| `--no-resync` | Never duplicate or drop frames to hold real time |
+| `--hdelay N` | Horizontal picture position (lower moves the picture right; default 10) |
+| `-q`, `--quiet` | No periodic status line |
 
-Init: pulse decoder reset via bridge GPIO → bridge register table → TW9910
-table → force colour standard → select input (TW9910 reg `02`) → decoder crop →
-bridge capture window (regs `0x0110`–`0x0117`) → start with bridge reg
-`0x0100 = 0xb3` (stop: `0x33`).
+`build/gvdump` prints the device's USB descriptors. `build/gvdump --regs [svideo]`
+also initialises the device and dumps the decoder registers; register `01` bit 7
+set means no video signal.
 
-Stream: every iso packet has a 4-byte header. Byte 0 bit 7 set = status packet
-marking the start of a field (bit 6 set = top field; byte 1 counts fields).
-Otherwise it is a data packet: byte 1 is a 6-bit sequence counter, the payload
-is UYVY at 1440 bytes per line. Fields are woven into 720×480 (or 720×576) frames.
+### Timing and A/V sync
 
-### Timing and sync
+Each isochronous packet is one USB microframe (125 µs), so the packet count is a
+clock shared by video and audio. gvcap holds output frames to that clock: it
+repeats a frame when the source falls a full frame behind (slow tape, lost data)
+and drops one when it gets a full frame ahead, so video stays aligned with the
+audio. `--timestamps` records where each frame sits on that clock and flags
+duplicates (`D`) and frames with short fields (`S`).
 
-Each iso packet is one USB microframe (125 µs), so packet count is a clock
-shared by video and audio. Output frames are held to that clock: a frame is
-duplicated when the source falls a full frame behind (slow tape, lost data) and
-dropped when it gets a full frame ahead, so video stays aligned with the audio.
-`--timestamps file.csv` records, per output frame, its time on that clock, the
-audio sample count at that point and a flag (`D` duplicate, `S` short field).
-`--no-resync` turns the duplicate/drop behaviour off.
-
-Lines that never arrive keep the previous frame's content rather than going
-black, and the decoder is pinned to the chosen standard so it keeps a 59.94 Hz
-cadence through signal dropouts.
+Lines that never arrive keep the previous frame's content instead of going black,
+and the decoder is pinned to the chosen standard so it keeps a steady frame rate
+through signal dropouts.
 
 ### Picture
 
-- Field order: top field first (confirmed with ffmpeg `idet` on a live tape: 300/300 TFF).
-- Horizontal position: the decoder's HDELAY defaults to 10, which puts the whole
-  ~708-pixel active line inside the 720-pixel frame with a few pixels of blanking
-  each side. Decks differ slightly; `--hdelay N` adjusts it (lower moves the
-  picture right). The Linux driver's value of 18 cuts ~5 px off the left edge.
-- Levels: BT.601 studio range as the TW9910 outputs it (black ≈ 16–20, white ≈ 235).
+- **Field order:** top field first (confirmed with ffmpeg's `idet` filter on a live tape).
+- **Horizontal position:** the default puts the whole ~708-pixel active line
+  inside the 720-pixel frame with a few pixels of blanking each side. Decks
+  differ slightly; adjust with `--hdelay`.
+- **Levels:** BT.601 studio range as the decoder outputs it (black ≈ 16–20, white ≈ 235).
 - The bottom line or two carry VHS head-switching noise, as on any VHS capture.
 
 ### Status
 
-Verified on an iMac Pro (Intel, macOS 15.8) with a VHS deck on composite:
-picture, sound, field order and the ffmpeg FFV1 pipeline all work; a 20 s capture
-had 600/600 frames, 0 duplicated or dropped, 0 packet errors, 1 lost field.
+Tested on an iMac Pro (Intel, macOS 15.8) with a VHS deck on composite: picture,
+sound, field order and the ffmpeg FFV1 pipeline all work. A 20-second capture
+delivered 600/600 frames with no duplicates, drops or packet errors.
 
-To do:
+Not yet tested:
 
-- S-Video and PAL: implemented, untested on a live source.
-- macOS 12 (Mac Pro 6,1): the code targets 12.3, but Homebrew's libusb is built
-  for the machine it is installed on. Build there, or link a static libusb.
-- Apple Silicon: should work unchanged; untested.
-- Phase 2: CoreMediaIO Camera Extension so the device appears in OBS/QuickTime.
+- S-Video and PAL with a live source.
+- macOS 12 Monterey (Mac Pro 6,1). The code targets 12.3, but Homebrew's libusb
+  is built for the macOS it was installed on, so build on that machine or link a
+  static libusb.
+- Apple Silicon.
+
+Planned: a CoreMediaIO Camera Extension so the device shows up in OBS and QuickTime.
+
+## Hardware notes
+
+What both drivers talk to:
+
+| Part | Details |
+|---|---|
+| USB bridge | Syntek STK1150. Registers via vendor control requests (`0x00` read, `0x01` write, register number in wIndex) |
+| Video decoder | Techwell TW9910 at I2C address `0x44`, reached through the bridge's I2C master (bridge registers `0x0200`–`0x0209`) |
+| Video stream | Interface 0, alt setting 5, endpoint `0x82`, isochronous, 3 × 1024 bytes per microframe |
+| Audio stream | Interface 2, alt setting 1, endpoint `0x84`, isochronous, raw PCM 48 kHz s16le stereo (vendor class, not USB Audio) |
+
+**Start-up:** pulse the decoder reset through a bridge GPIO, write the bridge
+register table, write the decoder table, set the colour standard and input
+(decoder register `02`), set the decoder crop and the bridge capture window
+(bridge registers `0x0110`–`0x0117`), then start capture with bridge register
+`0x0100 = 0xb3` (stop: `0x33`).
+
+**Video stream format:** every isochronous packet starts with a 4-byte header. If
+byte 0 bit 7 is set it is a status packet marking the start of a field (bit 6 set
+= top field). Otherwise it is a data packet: byte 1 is a 6-bit sequence counter
+and the payload is UYVY video at 1440 bytes per line. The two fields are woven
+into one frame.
+
+## License
+
+- `linux/`: dual-licensed, BSD-3-Clause or GPL-2.0 at your choice
+  ([LICENSE.bsd](linux/LICENSE.bsd), [LICENSE.gpl](linux/LICENSE.gpl)).
+- `macos/`: BSD-3-Clause ([LICENSE](macos/LICENSE)). It ports device logic from
+  the Linux driver under that driver's BSD option.
+
+## Credits
+
+- Linux driver and the reverse engineering behind both drivers: Isaac Lozano
+  ([Isaac-Lozano/GV-USB2-Driver](https://github.com/Isaac-Lozano/GV-USB2-Driver)).
+- macOS port: Brandon Tebedo.
