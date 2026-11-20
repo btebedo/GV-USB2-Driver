@@ -59,7 +59,17 @@ static struct {
 	int quiet;
 	int debug_packets;
 	int hdelay;
+	/* picture controls; PIC_UNSET = leave the decoder's own value */
+	int pic[5];
+	const char *control_path;
 } opt = { .resync = 1 };
+
+#define PIC_UNSET  (-1000)
+static const char *const pic_names[5] = {
+	"brightness", "contrast", "saturation", "hue", "sharpness"
+};
+static const int pic_min[5] = { -128, 0, 0, -128, 0 };
+static const int pic_max[5] = { 127, 255, 255, 127, 15 };
 
 /* ---- stats ------------------------------------------------------------- */
 
@@ -515,6 +525,15 @@ static void usage(FILE *f)
 "      --no-resync                never duplicate/drop frames to hold real time\n"
 "      --hdelay N                 horizontal picture position (decoder HDELAY);\n"
 "                                 lower moves the picture right\n"
+"      --brightness N             -128..127 (0 = no offset)\n"
+"      --contrast N               0..255 luma gain\n"
+"      --saturation N             0..255 colour gain (U and V)\n"
+"      --hue N                    -128..127 (0 = no shift)\n"
+"      --sharpness N              0..15\n"
+"                                 (picture options left out keep the decoder's\n"
+"                                 own values; the values in use are printed)\n"
+"      --control PATH             read \"NAME VALUE\" lines (picture option names)\n"
+"                                 from PATH, usually a FIFO, and apply them live\n"
 "  -q, --quiet                    no periodic status line\n"
 "      --debug-packets N          print the first N interesting packet headers\n"
 "  -h, --help\n"
@@ -541,6 +560,72 @@ static void print_stats(struct gvusb2 *gv, int final)
 		st.audio_overruns ? ", audio overruns" : "", sig);
 }
 
+/* "gvcap: picture: brightness 0, contrast 100, ..." — the values actually in
+ * the decoder, printed at start and after every change (unless --quiet). */
+static void print_picture(struct gvusb2 *gv)
+{
+	int b, c, s, h, sh;
+
+	if (opt.quiet || gvusb2_picture_get(gv, &b, &c, &s, &h, &sh) < 0)
+		return;
+	msg("picture: brightness %d, contrast %d, saturation %d, hue %d, sharpness %d",
+	    b, c, s, h, sh);
+}
+
+static int control_fd = -1;
+static char control_buf[256];
+static size_t control_len;
+
+static int apply_control_line(struct gvusb2 *gv, char *line)
+{
+	char name[32];
+	int value, k, ret;
+
+	if (sscanf(line, "%31s %d", name, &value) != 2) {
+		if (*line)
+			msg("control: ignoring '%s'", line);
+		return 0;
+	}
+	for (k = 0; k < 5; k++)
+		if (!strcmp(name, pic_names[k]))
+			break;
+	if (k == 5 || value < pic_min[k] || value > pic_max[k]) {
+		msg("control: ignoring '%s'", line);
+		return 0;
+	}
+	if ((ret = gvusb2_picture_set(gv, name, value)) < 0) {
+		msg("control: %s failed: %s", name, libusb_strerror(ret));
+		return 0;
+	}
+	return 1;
+}
+
+static void poll_control(struct gvusb2 *gv)
+{
+	int changed = 0;
+
+	for (;;) {
+		ssize_t n = read(control_fd, control_buf + control_len,
+				 sizeof(control_buf) - 1 - control_len);
+		char *nl;
+
+		if (n <= 0)	/* no data, or no writer connected yet */
+			break;
+		control_len += (size_t)n;
+		control_buf[control_len] = '\0';
+		while ((nl = strchr(control_buf, '\n')) != NULL) {
+			*nl = '\0';
+			changed |= apply_control_line(gv, control_buf);
+			control_len -= (size_t)(nl + 1 - control_buf);
+			memmove(control_buf, nl + 1, control_len + 1);
+		}
+		if (control_len == sizeof(control_buf) - 1)
+			control_len = 0;	/* overlong line: drop it */
+	}
+	if (changed)	/* one read-back per batch, not per command */
+		print_picture(gv);
+}
+
 int main(int argc, char **argv)
 {
 	static const struct option longopts[] = {
@@ -553,15 +638,23 @@ int main(int argc, char **argv)
 		{"quiet", no_argument, 0, 'q'},
 		{"debug-packets", required_argument, 0, 2},
 		{"hdelay", required_argument, 0, 3},
+		{"brightness", required_argument, 0, 10},
+		{"contrast", required_argument, 0, 11},
+		{"saturation", required_argument, 0, 12},
+		{"hue", required_argument, 0, 13},
+		{"sharpness", required_argument, 0, 14},
+		{"control", required_argument, 0, 4},
 		{"help", no_argument, 0, 'h'},
 		{0, 0, 0, 0}
 	};
 	struct libusb_transfer *vx[VID_XFERS] = {0}, *ax[AUD_XFERS] = {0};
 	struct gvusb2 gv;
 	struct sigaction sa;
-	uint64_t last_report = 0;
+	uint64_t last_report = 0, last_control = 0;
 	int c, i, ret, rc = 1;
 
+	for (i = 0; i < 5; i++)
+		opt.pic[i] = PIC_UNSET;
 	while ((c = getopt_long(argc, argv, "i:s:a:n:t:qh", longopts, NULL)) != -1) {
 		switch (c) {
 		case 'i':
@@ -606,6 +699,19 @@ int main(int argc, char **argv)
 				return 2;
 			  }
 			  break;
+		case 4:   opt.control_path = optarg; break;
+		case 10: case 11: case 12: case 13: case 14: {
+			int k = c - 10;
+			char *end;
+			long v = strtol(optarg, &end, 0);
+
+			if (*optarg == '\0' || *end != '\0' || v < pic_min[k] || v > pic_max[k]) {
+				msg("--%s must be %d..%d", pic_names[k], pic_min[k], pic_max[k]);
+				return 2;
+			}
+			opt.pic[k] = (int)v;
+			break;
+		}
 		case 'h': usage(stdout); return 0;
 		default:  usage(stderr); return 2;
 		}
@@ -654,6 +760,23 @@ int main(int argc, char **argv)
 		msg("device init failed: %s", libusb_strerror(ret));
 		goto out;
 	}
+	for (i = 0; i < 5; i++) {
+		if (opt.pic[i] == PIC_UNSET)
+			continue;
+		if ((ret = gvusb2_picture_set(&gv, pic_names[i], opt.pic[i])) < 0) {
+			msg("setting %s failed: %s", pic_names[i], libusb_strerror(ret));
+			goto out;
+		}
+	}
+	print_picture(&gv);
+	if (opt.control_path) {
+		/* non-blocking so a FIFO opens without waiting for a writer */
+		control_fd = open(opt.control_path, O_RDONLY | O_NONBLOCK);
+		if (control_fd < 0) {
+			msg("control %s: %s", opt.control_path, strerror(errno));
+			goto out;
+		}
+	}
 	if (opt.audio_path) {
 		if ((ret = gvusb2_audio_init(&gv)) < 0) {
 			msg("audio init failed: %s", libusb_strerror(ret));
@@ -688,6 +811,11 @@ int main(int argc, char **argv)
 			msg("usb event loop: %s", libusb_strerror(ret));
 			rc = 1;
 			break;
+		}
+		/* picture commands, polled every ~50 ms of stream time */
+		if (control_fd >= 0 && vp.uframes - last_control >= 400) {
+			last_control = vp.uframes;
+			poll_control(&gv);
 		}
 		/* every 5 s of stream time */
 		if (!opt.quiet && vp.uframes - last_report >= 40000) {
@@ -725,6 +853,8 @@ stop:
 	}
 	if (vp.ts_file)
 		fclose(vp.ts_file);
+	if (control_fd >= 0)
+		close(control_fd);
 	print_stats(&gv, 1);
 out:
 	gvusb2_close(&gv);

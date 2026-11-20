@@ -66,6 +66,18 @@ int gvusb2_video_stop(struct gvusb2 *gv);
  * (48 kHz, 16-bit LE, stereo, raw PCM on EP 0x84). */
 int gvusb2_audio_init(struct gvusb2 *gv);
 
+/* Picture controls (TW9910 regs 0x10-0x15), in gvcap's units:
+ *   brightness -128..127 (reg 0x10, two's complement, 0 = none)
+ *   contrast      0..255 (reg 0x11, luma gain)
+ *   saturation    0..255 (regs 0x13 + 0x14, U and V gain)
+ *   hue        -128..127 (reg 0x15, two's complement, 0 = none)
+ *   sharpness     0..15  (reg 0x12 bits 3:0)
+ * Names are the strings above. Returns <0 on a bad name/value or USB error. */
+int gvusb2_picture_set(struct gvusb2 *gv, const char *name, int value);
+/* Reads all five back; saturation reports the U gain. */
+int gvusb2_picture_get(struct gvusb2 *gv, int *brightness, int *contrast,
+		       int *saturation, int *hue, int *sharpness);
+
 /* Decoder status (TW9910 reg 0x01): bit7 = video loss, bit0 = 50 Hz */
 int gvusb2_video_status(struct gvusb2 *gv, uint8_t *status);
 
