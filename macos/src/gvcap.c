@@ -584,7 +584,17 @@ int main(int argc, char **argv)
 				return 2;
 			}
 			break;
-		case 'a': opt.audio_path = optarg; break;
+		case 'a':
+			/* "gvcap -a -i svideo" would otherwise take "-i" as the
+			 * audio file name and swallow the next option */
+			if (optarg[0] == '-') {
+				msg("--audio needs a file path, got '%s' "
+				    "(use ./%s for a file that really starts with -)",
+				    optarg, optarg);
+				return 2;
+			}
+			opt.audio_path = optarg;
+			break;
 		case 'n': opt.max_frames = atol(optarg); break;
 		case 't': opt.ts_path = optarg; break;
 		case 'q': opt.quiet = 1; break;
