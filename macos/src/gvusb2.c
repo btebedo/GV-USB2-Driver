@@ -280,6 +280,59 @@ int gvusb2_video_init(struct gvusb2 *gv, enum gvusb2_std std, enum gvusb2_input 
 	return gvusb2_set_reg_mask(gv, 0x05f0, 0x08, 0x08);
 }
 
+int gvusb2_picture_set(struct gvusb2 *gv, const char *name, int value)
+{
+	uint8_t v;
+	int ret;
+
+	if (!strcmp(name, "brightness") || !strcmp(name, "hue")) {
+		if (value < -128 || value > 127)
+			return LIBUSB_ERROR_INVALID_PARAM;
+		return gvusb2_i2c_write(gv, name[0] == 'b' ? 0x10 : 0x15, (uint8_t)(value & 0xff));
+	}
+	if (!strcmp(name, "contrast")) {
+		if (value < 0 || value > 255)
+			return LIBUSB_ERROR_INVALID_PARAM;
+		return gvusb2_i2c_write(gv, 0x11, (uint8_t)value);
+	}
+	if (!strcmp(name, "saturation")) {
+		if (value < 0 || value > 255)
+			return LIBUSB_ERROR_INVALID_PARAM;
+		if ((ret = gvusb2_i2c_write(gv, 0x13, (uint8_t)value)) < 0)
+			return ret;
+		return gvusb2_i2c_write(gv, 0x14, (uint8_t)value);
+	}
+	if (!strcmp(name, "sharpness")) {
+		if (value < 0 || value > 15)
+			return LIBUSB_ERROR_INVALID_PARAM;
+		/* keep the upper (coring / peaking) bits as the chip has them */
+		if ((ret = gvusb2_i2c_read(gv, 0x12, &v)) < 0)
+			return ret;
+		return gvusb2_i2c_write(gv, 0x12, (uint8_t)((v & 0xf0) | value));
+	}
+	return LIBUSB_ERROR_INVALID_PARAM;
+}
+
+int gvusb2_picture_get(struct gvusb2 *gv, int *brightness, int *contrast,
+		       int *saturation, int *hue, int *sharpness)
+{
+	uint8_t b, c, sh, u, h;
+	int ret;
+
+	if ((ret = gvusb2_i2c_read(gv, 0x10, &b)) < 0 ||
+	    (ret = gvusb2_i2c_read(gv, 0x11, &c)) < 0 ||
+	    (ret = gvusb2_i2c_read(gv, 0x12, &sh)) < 0 ||
+	    (ret = gvusb2_i2c_read(gv, 0x13, &u)) < 0 ||
+	    (ret = gvusb2_i2c_read(gv, 0x15, &h)) < 0)
+		return ret;
+	*brightness = (int8_t)b;
+	*contrast = c;
+	*sharpness = sh & 0x0f;
+	*saturation = u;
+	*hue = (int8_t)h;
+	return 0;
+}
+
 int gvusb2_video_start(struct gvusb2 *gv)
 {
 	int ret = gvusb2_write_reg(gv, 0x0100, 0xb3);

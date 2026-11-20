@@ -88,7 +88,26 @@ duplicate, drop and error counts and whether the decoder sees a signal.
 | `-t`, `--timestamps PATH` | Per-frame CSV: index, time on the USB clock, audio sample count, flag |
 | `--no-resync` | Never duplicate or drop frames to hold real time |
 | `--hdelay N` | Horizontal picture position (lower moves the picture right; default 10) |
+| `--brightness N` | Decoder brightness offset, -128..127 (0 = none) |
+| `--contrast N` | Decoder luma gain, 0..255 |
+| `--saturation N` | Decoder colour gain (U and V), 0..255 |
+| `--hue N` | Decoder hue, -128..127 (0 = none) |
+| `--sharpness N` | Decoder sharpness, 0..15 |
+| `--control PATH` | Read `NAME VALUE` lines (picture option names) from a file or FIFO and apply them live |
 | `-q`, `--quiet` | No periodic status line |
+
+Picture options you leave out keep the decoder's own values. At start-up, and
+after each change made through `--control`, gvcap prints the values actually in
+the decoder, for example
+`gvcap: picture: brightness 0, contrast 100, saturation 128, hue 0, sharpness 1`.
+For an archive capture it's usually best to leave these alone, or set them once
+and keep them for the whole tape. Sharpening in particular can't be undone later.
+
+```bash
+mkfifo /tmp/gv.ctl
+build/gvcap -i composite --control /tmp/gv.ctl | ffplay -f rawvideo -pixel_format uyvy422 -video_size 720x480 -
+echo "brightness 10" > /tmp/gv.ctl     # from another terminal
+```
 
 `build/gvdump` prints the device's USB descriptors. `build/gvdump --regs [svideo]`
 also initialises the device and dumps the decoder registers; register `01` bit 7
