@@ -58,6 +58,7 @@ static struct {
 	int resync;
 	int quiet;
 	int debug_packets;
+	int hdelay;
 } opt = { .resync = 1 };
 
 /* ---- stats ------------------------------------------------------------- */
@@ -512,13 +513,15 @@ static void usage(FILE *f)
 "                                 index, ms on the USB clock, audio samples, flag\n"
 "                                 (flag: - normal, D duplicate, S short field)\n"
 "      --no-resync                never duplicate/drop frames to hold real time\n"
+"      --hdelay N                 horizontal picture position (decoder HDELAY);\n"
+"                                 lower moves the picture right\n"
 "  -q, --quiet                    no periodic status line\n"
 "      --debug-packets N          print the first N interesting packet headers\n"
 "  -h, --help\n"
 "\n"
 "Video goes to stdout as raw UYVY 4:2:2, interlaced, top line first:\n"
-"  gvcap -i svideo | ffmpeg -f rawvideo -pix_fmt uyvy422 -s 720x480 \\\n"
-"      -r 30000/1001 -i - -c:v ffv1 out.mkv\n");
+"  gvcap -i composite | ffmpeg -f rawvideo -pix_fmt uyvy422 -s 720x480 \\\n"
+"      -r 30000/1001 -top 1 -i - -c:v ffv1 -level 3 out.mkv\n");
 }
 
 static void print_stats(struct gvusb2 *gv, int final)
@@ -549,6 +552,7 @@ int main(int argc, char **argv)
 		{"no-resync", no_argument, 0, 1},
 		{"quiet", no_argument, 0, 'q'},
 		{"debug-packets", required_argument, 0, 2},
+		{"hdelay", required_argument, 0, 3},
 		{"help", no_argument, 0, 'h'},
 		{0, 0, 0, 0}
 	};
@@ -586,6 +590,12 @@ int main(int argc, char **argv)
 		case 'q': opt.quiet = 1; break;
 		case 1:   opt.resync = 0; break;
 		case 2:   opt.debug_packets = atoi(optarg); break;
+		case 3:   opt.hdelay = (int)strtol(optarg, NULL, 0);
+			  if (opt.hdelay < 1 || opt.hdelay > 0x3ff) {
+				msg("--hdelay must be 1..1023");
+				return 2;
+			  }
+			  break;
 		case 'h': usage(stdout); return 0;
 		default:  usage(stderr); return 2;
 		}
@@ -629,6 +639,7 @@ int main(int argc, char **argv)
 
 	if (gvusb2_open(&gv) < 0)
 		return 1;
+	gv.hdelay = opt.hdelay;
 	if ((ret = gvusb2_video_init(&gv, opt.std, opt.input)) < 0) {
 		msg("device init failed: %s", libusb_strerror(ret));
 		goto out;

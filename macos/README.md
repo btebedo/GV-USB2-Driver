@@ -19,7 +19,7 @@ Produces `build/gvcap` and `build/gvdump`. Builds on Intel and Apple Silicon.
 ## Use
 
 ```bash
-build/gvcap --input svideo | ffmpeg -f rawvideo -pix_fmt uyvy422 -s 720x480 -r 30000/1001 -i - -c:v ffv1 out.mkv
+build/gvcap --input composite | ffmpeg -f rawvideo -pix_fmt uyvy422 -s 720x480 -r 30000/1001 -top 1 -i - -c:v ffv1 -level 3 out.mkv
 ```
 
 With audio (the device's audio is not USB Audio Class, so macOS does not see it;
@@ -27,14 +27,17 @@ gvcap reads it itself and writes raw 48 kHz 16-bit stereo to a file or FIFO):
 
 ```bash
 mkfifo /tmp/gv.pcm
-build/gvcap -i svideo -a /tmp/gv.pcm | ffmpeg \
-    -f rawvideo -pix_fmt uyvy422 -s 720x480 -r 30000/1001 -i - \
+build/gvcap -i composite -a /tmp/gv.pcm | ffmpeg \
+    -f rawvideo -pix_fmt uyvy422 -s 720x480 -r 30000/1001 -top 1 -i - \
     -f s16le -ar 48000 -ac 2 -i /tmp/gv.pcm \
-    -c:v ffv1 -c:a pcm_s16le out.mkv
+    -c:v ffv1 -level 3 -c:a pcm_s16le out.mkv
 ```
 
+`-top 1` matters: the frames are interlaced, top field first, and without it
+ffmpeg marks them progressive, so players won't deinterlace them correctly.
+
 Stop with Ctrl-C. `gvcap --help` lists the options (`--std pal`, `--frames`,
-`--timestamps`, `--no-resync`, ...). A status line goes to stderr every 5 s with
+`--timestamps`, `--no-resync`, `--hdelay`, ...). A status line goes to stderr every 5 s with
 frame, duplicate, drop and error counts and whether the decoder sees a signal.
 
 `build/gvdump` prints the USB descriptors; `build/gvdump --regs [svideo]` also
@@ -74,17 +77,25 @@ Lines that never arrive keep the previous frame's content rather than going
 black, and the decoder is pinned to the chosen standard so it keeps a 59.94 Hz
 cadence through signal dropouts.
 
+## Picture
+
+- Field order: top field first (confirmed with ffmpeg `idet` on a live tape: 300/300 TFF).
+- Horizontal position: the decoder's HDELAY defaults to 10, which puts the whole
+  ~708-pixel active line inside the 720-pixel frame with a few pixels of blanking
+  each side. Decks differ slightly; `--hdelay N` adjusts it (lower moves the
+  picture right). The old Linux default of 18 cut ~5 px off the left edge.
+- Levels: BT.601 studio range as the TW9910 outputs it (black ≈ 16–20, white ≈ 235).
+- The bottom line or two carry VHS head-switching noise, as on any VHS capture.
+
 ## Status
 
-Verified on an iMac Pro (Intel, macOS 15.8) with real hardware: descriptors,
-init, video and audio streaming, and the ffmpeg pipeline all run with zero
-packet errors. **Not yet verified with a live video source** — no signal was
-connected during bring-up, so picture quality, field order, crop offsets,
-colour levels, the S-Video path and PAL are untested.
+Verified on an iMac Pro (Intel, macOS 15.8) with a VHS deck on composite:
+picture, sound, field order and the ffmpeg FFV1 pipeline all work; a 20 s capture
+had 600/600 frames, 0 duplicated or dropped, 0 packet errors, 1 lost field.
 
 To do:
 
-- Check a real picture: field order, crop window, levels, S-Video, PAL.
+- S-Video and PAL: implemented, untested on a live source.
 - macOS 12 (Mac Pro 6,1): the code targets 12.3, but Homebrew's libusb is built
   for the machine it is installed on. Build there, or link a static libusb.
 - Apple Silicon: should work unchanged; untested.

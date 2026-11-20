@@ -39,7 +39,10 @@ struct gvusb2 {
 	libusb_device_handle *h;
 	int claimed_video;
 	int claimed_audio;
+	int hdelay;		/* TW9910 HDELAY override, 0 = default */
 };
+
+#define GVUSB2_HDELAY_DEFAULT 0x0a	/* centres a full ~708 px active line */
 
 int  gvusb2_open(struct gvusb2 *gv);
 void gvusb2_close(struct gvusb2 *gv);

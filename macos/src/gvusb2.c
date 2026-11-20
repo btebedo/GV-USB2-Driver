@@ -184,6 +184,8 @@ int gvusb2_video_init(struct gvusb2 *gv, enum gvusb2_std std, enum gvusb2_input 
 	const unsigned hstart = 4, vstart = 2;
 	const unsigned hend = hstart + 1440;
 	const unsigned vend = vstart + (std == GVUSB2_STD_PAL ? 288 : 240);
+	const unsigned hdelay = gv->hdelay > 0 ? (unsigned)gv->hdelay : GVUSB2_HDELAY_DEFAULT;
+	const uint8_t hd_hi = (uint8_t)(((hdelay >> 8) & 3) << 2);
 	const struct regval *t;
 	uint8_t v, id;
 	int ret;
@@ -243,22 +245,23 @@ int gvusb2_video_init(struct gvusb2 *gv, enum gvusb2_std std, enum gvusb2_input 
 			(in == GVUSB2_INPUT_SVIDEO ? 0x14 : 0x00))) < 0)
 		return ret;
 
-	/* decoder cropping */
+	/* decoder cropping. HDELAY (reg 0x07 bits 3:2 + reg 0x0a) sets where
+	 * the 720 output samples start in the line: lower = picture moves right */
 	if ((ret = gvusb2_i2c_read(gv, 0x07, &v)) < 0)
 		return ret;
 	if (std == GVUSB2_STD_PAL) {
-		/* vdelay 0x18, vactive 0x120 (288), hdelay 0x12, hactive 0x2d2 */
-		if ((ret = gvusb2_i2c_write(gv, 0x07, (v & 0x0f) | 0x10)) < 0 ||
+		/* vdelay 0x18, vactive 0x120 (288), hactive 0x2d2 */
+		if ((ret = gvusb2_i2c_write(gv, 0x07, (v & 0x03) | 0x10 | hd_hi)) < 0 ||
 		    (ret = gvusb2_i2c_write(gv, 0x08, 0x18)) < 0 ||
 		    (ret = gvusb2_i2c_write(gv, 0x09, 0x20)) < 0)
 			return ret;
 	} else {
-		if ((ret = gvusb2_i2c_write(gv, 0x07, v & 0x0f)) < 0 ||
+		if ((ret = gvusb2_i2c_write(gv, 0x07, (v & 0x03) | hd_hi)) < 0 ||
 		    (ret = gvusb2_i2c_write(gv, 0x08, 0x13)) < 0 ||
 		    (ret = gvusb2_i2c_write(gv, 0x09, 0xf4)) < 0)
 			return ret;
 	}
-	if ((ret = gvusb2_i2c_write(gv, 0x0a, 0x12)) < 0 ||
+	if ((ret = gvusb2_i2c_write(gv, 0x0a, hdelay & 0xff)) < 0 ||
 	    (ret = gvusb2_i2c_write(gv, 0x0b, 0xd2)) < 0)
 		return ret;
 
