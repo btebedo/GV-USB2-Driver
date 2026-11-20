@@ -167,3 +167,6 @@ into one frame.
 - Linux driver and the reverse engineering behind both drivers: Isaac Lozano
   ([Isaac-Lozano/GV-USB2-Driver](https://github.com/Isaac-Lozano/GV-USB2-Driver)).
 - macOS port: Brandon Tebedo.
+
+The macOS port is an independent project. It is not affiliated with or endorsed
+by Isaac Lozano or I-O DATA. GV-USB2 is a product name of I-O DATA DEVICE, INC.
