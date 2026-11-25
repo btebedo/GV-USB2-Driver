@@ -844,6 +844,13 @@ stop:
 	pthread_cond_signal(&fq.cond);
 	pthread_mutex_unlock(&fq.lock);
 	pthread_join(fq.thread, NULL);
+	/*
+	 * All video is written: close it now, not at exit. A reader such as
+	 * ffmpeg interleaves video and audio, so it can stop reading audio while
+	 * it waits for more video. If the audio writer still has a backlog to
+	 * flush, keeping stdout open here would leave everyone waiting forever.
+	 */
+	close(STDOUT_FILENO);
 	if (opt.audio_path) {
 		pthread_mutex_lock(&aq.lock);
 		aq.done = 1;
