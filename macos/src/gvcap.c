@@ -148,6 +148,9 @@ static void *frame_writer(void *arg)
 			break;
 		}
 	}
+	/* all video written (or the reader went away): end the stream now so a
+	 * reader waiting on video can move on to the audio */
+	close(STDOUT_FILENO);
 	free(local);
 	return NULL;
 }
@@ -839,18 +842,25 @@ stop:
 	}
 	gvusb2_video_stop(&gv);
 
+	/*
+	 * Tell both writers to finish at the same time and let each close its
+	 * own output once drained. A reader such as ffmpeg interleaves video and
+	 * audio and may be blocked on either one; finishing them in sequence
+	 * deadlocks whenever it is waiting on the one we have not ended yet.
+	 */
 	pthread_mutex_lock(&fq.lock);
 	fq.done = 1;
 	pthread_cond_signal(&fq.cond);
 	pthread_mutex_unlock(&fq.lock);
-	pthread_join(fq.thread, NULL);
 	if (opt.audio_path) {
 		pthread_mutex_lock(&aq.lock);
 		aq.done = 1;
 		pthread_cond_signal(&aq.cond);
 		pthread_mutex_unlock(&aq.lock);
-		pthread_join(aq.thread, NULL);
 	}
+	pthread_join(fq.thread, NULL);
+	if (opt.audio_path)
+		pthread_join(aq.thread, NULL);
 	if (vp.ts_file)
 		fclose(vp.ts_file);
 	if (control_fd >= 0)
